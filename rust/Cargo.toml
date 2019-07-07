@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "libnbd-sys",
+    "libnbd-rs",
+]

@@ -87,6 +87,11 @@ Makefile.in
 /python/nbd.py
 /python/run-python-tests
 /run
+/rust/**/Cargo.lock
+/rust/*/Cargo.toml
+/rust/libnbd/src/glue.rs
+/rust/libnbd-sys/src/lib.rs
+/rust/target
 /sh/nbdsh
 /sh/nbdsh.1
 /stamp-h1

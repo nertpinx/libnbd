@@ -106,5 +106,14 @@ fi
 export GNOME_KEYRING_CONTROL=
 export GNOME_KEYRING_PID=
 
+# For rust
+export RUST="@RUST@"
+if [ -z "$RUSTFLAGS" ]; then
+    RUSTFLAGS="-C link-args=-L$b/lib/.libs"
+else
+    RUSTFLAGS="$RUSTFLAGS -C link-args=-L$b/lib/.libs"
+fi
+export RUSTFLAGS
+
 # Run the program.
 exec $libtool $valgrind "$@"

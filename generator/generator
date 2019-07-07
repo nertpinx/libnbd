@@ -3124,6 +3124,9 @@ let () =
     | name, { permitted_states = (_::_); may_set_error = false } ->
        failwithf "%s: if may_set_error is false, permitted_states must be empty (any permitted state)"
                  name
+    | name, { ret = RErr; may_set_error = false } ->
+       failwithf "%s: if ret is RErr, then may_set_error cannot be false"
+                 name
     | _ -> ()
   ) handle_calls
 
@@ -4939,6 +4942,295 @@ let generate_ocaml_nbd_c () =
 
   List.iter print_ocaml_binding handle_calls
 
+let rec pr_indent = function
+  | 0 -> ()
+  | n -> pr "    "; pr_indent (n - 1)
+
+let rec print_rust_ffi_arg_list ?(handle = false) indent args =
+  let pri () = pr_indent indent in
+  let pri2 () = pr_indent (indent + 1) in
+  pr "(\n";
+  if handle then (
+    pri (); pr "h: *mut nbd_handle,\n";
+  );
+  List.iter (
+    fun arg ->
+      (match arg with
+       | ArrayAndLen (UInt32 n, len) ->
+          pri (); pr "%s: *mut u32,\n" n;
+          pri (); pr "%s: usize,\n" len
+       | ArrayAndLen _ -> assert false
+       | Bool n -> pri (); pr "%s: bool,\n" n
+       | BytesIn (n, len)
+       | BytesPersistIn (n, len) ->
+          pri (); pr "%s: *const c_void,\n" n;
+          pri (); pr "%s: usize,\n" len
+       | BytesOut (n, len)
+       | BytesPersistOut (n, len) ->
+          pri (); pr "%s: *mut c_void,\n" n;
+          pri (); pr "%s: usize,\n" len
+       | Callback (n, args)
+       | CallbackPersist (n, args) ->
+         pri (); pr "%s: Option<\n" n;
+         pri2 (); pr "unsafe extern \"C\" fn";
+         print_rust_ffi_arg_list (indent + 2) args;
+         pr " -> c_int,\n";
+         pri (); pr ">,\n"
+       | Flags n -> pri (); pr "%s: u32,\n" n
+       | Int n -> pri (); pr "%s: c_int,\n" n
+       | Int64 n -> pri (); pr "%s: i64,\n" n
+       | Mutable (Int n) -> pri (); pr "%s: *mut c_int,\n" n
+       | Mutable arg -> assert false
+       | Opaque n -> pri (); pr "%s: *mut c_void,\n" n
+       | Path n
+       | String n -> pri (); pr "%s: *const c_char,\n" n
+       | StringList n -> pri (); pr "%s: *mut *mut c_char,\n" n
+       | SockAddrAndLen (n, len) ->
+         pri (); pr "%s: *const libc::sockaddr,\n" n;
+         pri (); pr "%s: libc::socklen_t,\n" len
+       | UInt n -> pri (); pr "%s: c_uint,\n" n
+       | UInt32 n -> pri (); pr "%s: u32,\n" n
+       | UInt64 n -> pri (); pr "%s: u64,\n" n
+      );
+  ) args;
+  pr_indent (indent - 1); pr ")"
+
+let print_rust_arg_list ?(handle = false) indent args =
+  let pri () = pr_indent indent in
+  let pri2 () = pr_indent (indent + 1) in
+  pr "(\n";
+  if handle then (
+    pri (); pr "&self,\n";
+  );
+  List.iter (
+    fun arg ->
+      (* TODO: rewrite to use Rust types *)
+      (match arg with
+       | ArrayAndLen (UInt32 n, len) ->
+          pr "%s: *mut u32,\n" n; pri ();
+          pr "%s: usize,\n" len; pri ()
+       | ArrayAndLen _ -> assert false
+       | Bool n -> pri (); pr "%s: bool,\n" n
+       | BytesIn (n, len)
+       | BytesPersistIn (n, len) ->
+          pri (); pr "%s: *const c_void,\n" n;
+          pri (); pr "%s: usize,\n" len
+       | BytesOut (n, len)
+       | BytesPersistOut (n, len) ->
+          pri (); pr "%s: *mut c_void,\n" n;
+          pri (); pr "%s: usize,\n" len
+       | Callback (n, args)
+       | CallbackPersist (n, args) ->
+         pri (); pr "%s: Option<\n" n;
+         pri2 (); pr "unsafe extern \"C\" fn";
+         print_rust_ffi_arg_list (indent + 2) args;
+         pr " -> c_int,\n";
+         pri (); pr ">,\n"
+       | Flags n -> pri (); pr "%s: u32,\n" n
+       | Int n -> pri (); pr "%s: c_int,\n" n
+       | Int64 n -> pri (); pr "%s: i64,\n" n
+       | Mutable (Int n) -> pri (); pr "%s: *mut c_int,\n" n
+       | Mutable arg -> assert false
+       | Opaque n -> pri (); pr "%s: *mut c_void,\n" n
+       | Path n
+       | String n -> pri (); pr "%s: *const c_char,\n" n
+       | StringList n -> pri (); pr "%s: *mut *mut c_char,\n" n
+       | SockAddrAndLen (n, len) ->
+         pri (); pr "%s: *const libc::sockaddr,\n" n;
+         pri (); pr "%s: libc::socklen_t" len
+       | UInt n -> pri (); pr "%s: c_uint,\n" n
+       | UInt32 n -> pri (); pr "%s: u32,\n" n
+       | UInt64 n -> pri (); pr "%s: u64,\n" n
+      );
+  ) args;
+  pr_indent (indent - 1); pr ")"
+
+let generate_rust_sys_lib_rs () =
+  let print_extern (name, {args; ret; shortdesc; longdesc }) =
+    let ret_rs_type =
+      match ret with
+      | RBool
+      | RErr
+      | RFd
+      | RInt -> "c_int"
+      | RConstString -> "*const c_char"
+      | RInt64 -> "i64"
+      | RString -> "*mut c_char"
+    in
+
+    pr "\n";
+    pr "    /// %s\n" (String.capitalize_ascii shortdesc);
+    pr "    ///\n";
+    List.iter (fun line -> pr "    /// %s\n" (String.trim line)) (pod2text longdesc);
+    pr "    pub fn nbd_%s" name;
+    print_rust_ffi_arg_list ~handle:true 2 args;
+    pr " -> %s;\n" ret_rs_type
+  in
+
+  generate_header CStyle;
+
+  (* TODO: global documentation *)
+
+  pr "#[allow(unused_imports)]\n";
+  pr "use std::os::raw::{c_char, c_int, c_uint, c_void};\n";
+  pr "\n";
+
+  (* TODO: print constants *)
+  (* TODO: print constants for metadata namespaces *)
+
+  pr "\
+#[repr(C)]
+#[derive(Debug)]
+pub struct nbd_handle {
+    _unused: [u8; 0],
+}
+
+#[link(name = \"nbd\")]
+extern \"C\" {
+    pub fn nbd_create() -> *mut nbd_handle;
+    pub fn nbd_close(handle: *mut nbd_handle);
+    pub fn nbd_add_close_callback(
+        handle: *mut nbd_handle,
+        callback: Option<unsafe extern \"C\" fn(*mut c_void)>,
+        ) -> c_int;
+
+    pub fn nbd_get_error() -> *const c_char;
+    pub fn nbd_get_errno() -> c_int;
+";
+
+  List.iter print_extern handle_calls;
+
+  pr "}\n";
+  pr "\n"
+
+let generate_rust_glue_rs () =
+  let print_wrapper (name, {args; ret; shortdesc; longdesc; may_set_error}) =
+    let ret_rs_type =
+      let typ =
+        match ret with
+        | RBool -> "bool"
+        | RErr -> "()"
+        | RFd -> "RawFd"
+        | RInt -> "i32"
+        | RConstString -> "&'static str"
+        | RInt64 -> "i64"
+        | RString -> "String" in
+      if may_set_error then "Result<" ^ typ ^ ", NbdError>" else typ
+    in
+
+    pr "\n";
+    pr "    /// %s\n" (String.capitalize_ascii shortdesc);
+    pr "    ///\n";
+    List.iter (fun line -> pr "    /// %s\n" (String.trim line)) (pod2text longdesc);
+    pr "\n    pub fn %s" name;
+    print_rust_arg_list ~handle:true 2 args;
+    pr " -> %s {\n" ret_rs_type;
+
+    let num = ref 0 in
+    let arg_transform arg num =
+      (* TODO: transform Rust types to C types *)
+      match arg with
+      | ArrayAndLen (UInt32 n, len) -> [""], 2
+      | ArrayAndLen _ -> assert false
+      | Bool n -> [], 0
+      | BytesIn (n, _) | BytesPersistIn (n, _) -> [""], 2
+      | BytesPersistOut (n, _) -> [""], 2
+      | BytesOut (_, count) -> [""], 2
+      | Callback (n, _) | CallbackPersist (n, _) -> [""], 2
+      | Flags n -> [""], 1
+      | Int n -> [""], 1
+      | Int64 n -> [""], 1
+      | Mutable arg -> [""], 1
+      | Opaque n -> [""], 1
+      | Path n -> [""], 1
+      | SockAddrAndLen (n, _) -> [""], 2
+      | String n -> [""], 1
+      | StringList n -> [""], 1
+      | UInt n -> [""], 1
+      | UInt32 n -> [""], 1
+      | UInt64 n -> [""], 1
+    in
+
+    let before = List.flatten (List.map (fun arg ->
+        let code, n = arg_transform arg num in
+        num := !num + n;
+        code
+      ) args)
+    in
+
+    let ret_transform ret =
+      let err_chk =
+        [(match ret with
+            | RBool
+            | RErr
+            | RFd
+            | RInt
+            | RInt64 -> "if ret == -1 {"
+            | RConstString
+            | RString -> "if ret.is_null() {");
+          "    return Err(NbdError::from_libnbd());";
+          "}";
+        ]
+      in
+      let trans =
+        match ret with
+        | RBool
+        | RErr
+        | RFd
+        | RInt
+        | RInt64 -> []
+        | RConstString -> [
+            "let ret = unsafe { CStr::from_ptr(ret) };";
+            "let ret = ret.to_str().unwrap();";
+          ]
+        | RString -> [
+            "let c_str = unsafe { CStr::from_ptr(ret as *const c_char) };";
+            "let ret = c_str.to_string_lossy().into_owned();";
+            "unsafe { libc::free(c_str.as_ptr() as *mut c_void) }; ";
+          ]
+      in
+      let real_ret =
+        match ret with
+        | RBool -> "ret != 0";
+        | RErr -> "()"
+        | RFd
+        | RInt
+        | RInt64
+        | RConstString
+        | RString -> "ret"
+      in
+      (if may_set_error then err_chk else []) @
+      trans @
+      [(if may_set_error then "Ok(" ^ real_ret ^ ")" else real_ret)]
+    in
+
+    List.iter (fun str -> pr "        %s\n" str) before;
+    pr "        let ret = unsafe { nbd_%s (self.handle" name;
+    let argnames = List.flatten (List.map name_of_arg args) in
+    List.iter (pr ", %s") argnames;
+    pr ") };\n";
+    List.iter (fun str -> pr "        %s\n" str) (ret_transform ret);
+    pr "    }\n";
+  in
+
+  generate_header CStyle;
+
+  pr "\
+#[allow(unused_imports)]
+use std::os::raw::{c_char, c_int, c_uint, c_void};
+use std::os::unix::io::RawFd;
+use std::ffi::CStr;
+use libnbd_sys::*;
+use libc;
+
+use super::nbd_error::*;
+pub use super::base::*;
+";
+
+  pr "impl Nbd {\n";
+  List.iter print_wrapper handle_calls;
+  pr "}\n"
+
 (*----------------------------------------------------------------------*)
 
 (* Write the output files. *)
@@ -4957,3 +5249,5 @@ let () =
   output_to "ocaml/NBD.mli" generate_ocaml_nbd_mli;
   output_to "ocaml/NBD.ml" generate_ocaml_nbd_ml;
   output_to "ocaml/nbd-c.c" generate_ocaml_nbd_c;
+  output_to "rust/libnbd-sys/src/lib.rs" generate_rust_sys_lib_rs;
+  output_to "rust/libnbd-rs/src/glue.rs" generate_rust_glue_rs;

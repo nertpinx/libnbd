@@ -1,0 +1,10 @@
+[package]
+name = "libnbd-sys"
+version = "@VERSION@"
+authors = ["Martin Kletzander <mkletzan@redhat.com>"]
+edition = "2018"
+links   = "nbd"
+build   = "build.rs"
+
+[dependencies]
+libc = "^0.2.58"

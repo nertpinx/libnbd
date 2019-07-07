@@ -264,6 +264,19 @@ AS_IF([test "x$enable_python" != "xno"],[
 AM_CONDITIONAL([HAVE_PYTHON],
     [test "x$PYTHON" != "xno" && test "x$have_python_module" = "x1" ])
 
+dnl Rust, optional, just runs tests
+AC_ARG_ENABLE([rust],
+    AS_HELP_STRING([--disable-rust], [disable Rust language binding tests]),
+    [],
+    [enable_rust=yes])
+AS_IF([test "x$enable_rust" != "xno"],
+      [AC_CHECK_PROG([CARGO],[cargo],[cargo],[no])])
+AS_IF([test "$CARGO" = "no"],
+      [AC_MSG_ERROR([cargo not found])])
+
+AM_CONDITIONAL([HAVE_RUST],
+    [test "$CARGO" != "no" && test "$enable_rust" = "yes" ])
+
 dnl Produce output files.
 AC_CONFIG_HEADERS([config.h])
 
@@ -289,6 +302,9 @@ AC_CONFIG_FILES([Makefile
                  ocaml/META
                  ocaml/examples/Makefile
                  python/Makefile
+                 rust/Makefile
+                 rust/libnbd-sys/Cargo.toml
+                 rust/libnbd-rs/Cargo.toml
                  sh/Makefile
                  tests/Makefile
                  tests/functions.sh

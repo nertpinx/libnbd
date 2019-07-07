@@ -39,6 +39,7 @@ SUBDIRS = \
 	ocaml \
 	ocaml/examples \
 	interop \
+	rust \
 	$(NULL)
 
 noinst_SCRIPTS = run
