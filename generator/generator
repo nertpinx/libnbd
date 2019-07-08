@@ -5069,14 +5069,38 @@ let generate_rust_sys_lib_rs () =
 
   generate_header CStyle;
 
-  (* TODO: global documentation *)
+  pr "\
+//! # libnbd bindings for Rust
+//!
+//! Pure FFI bindings for (libnbd)[https://github.com/libguestfs/libnbd/].
+//! Generated automatically from upstream, so hopefully up to date.  For more
+//! detailed documentation look at man pages libnbd(3) and libnbd-api(3)
+//! provided by libnbd itself.
+";
 
   pr "#[allow(unused_imports)]\n";
   pr "use std::os::raw::{c_char, c_int, c_uint, c_void};\n";
   pr "\n";
 
-  (* TODO: print constants *)
-  (* TODO: print constants for metadata namespaces *)
+  List.iter (
+    fun (n, i) -> pr "pub const %s: u32 = %d;\n" (String.uppercase_ascii n) i
+  ) constants;
+
+  pr "\n";
+
+  List.iter (
+    fun (ns, ctxts) ->
+      let ns_up = String.uppercase_ascii ns in
+      pr "pub const NAMESPACE_%s: &'static str = \"%s:\";\n" ns_up ns;
+      List.iter (
+        fun (ctxt, consts) ->
+          let ctxt_up = String.uppercase_ascii ctxt in
+          pr "pub const CONTEXT_%s_%s: &'static str = \"%s:%s\";\n" ns_up ctxt_up ns ctxt;
+          List.iter (fun (n, i) ->
+              pr "pub const %s: u32 = %d;\n" (String.uppercase_ascii n) i
+            ) consts
+      ) ctxts;
+  ) metadata_namespaces;
 
   pr "\
 #[repr(C)]
