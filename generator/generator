@@ -3188,7 +3188,7 @@ let rec print_c_arg_list ?(handle = false) args =
       | BytesPersistOut (n, len) -> pr "void *%s, size_t %s" n len
       | Callback (n, args)
       | CallbackPersist (n, args) ->
-         pr "void (*%s) " n; print_c_arg_list args
+         pr "int (*%s) " n; print_c_arg_list args
       | Flags n -> pr "uint32_t %s" n
       | Int n -> pr "int %s" n
       | Int64 n -> pr "int64_t %s" n
@@ -4947,12 +4947,15 @@ let rec indent = function
   | n -> "    " ^ (indent (n - 1))
 
 let str_indent n str =
-  (indent n) ^ str
+  if str <> "" then (indent n) ^ str else ""
 
 let rust_fn_wild_rex = Str.regexp "C<nbd_\\*>"
 let rust_fn_rex = Str.regexp "C<nbd_\\([^>]*\\)>"
 let rust_const_rex = Str.regexp "C<LIBNBD_\\([^>]*\\)>"
 let rust_rest_rex = Str.regexp "C<\\([^>]*\\)>"
+
+let rust_cb_type = ref None
+let rust_cb_opaque = ref ""
 
 let trim_trailing_empty l =
   let rec loop = function
@@ -4962,20 +4965,57 @@ let trim_trailing_empty l =
   in
   List.rev (loop (List.rev l))
 
+(* TODO: this should be the fastest to fill out, but it needs to be based on the
+ * one that outputs the whole name:type, so that they match.  Maybe combine them
+ * together so they are in sync. *)
+let rec rust_arg_type_list args =
+  String.concat ", " (
+    List.flatten (
+      List.map (
+        fun arg ->
+          match arg with
+          | ArrayAndLen (arg, n) -> assert false
+          | Bool n -> assert false
+          | BytesIn (n, len) -> assert false
+          | BytesOut (n, len) -> assert false
+          | BytesPersistIn (n, len) -> assert false
+          | BytesPersistOut (n, len) -> assert false
+          | Callback (n, _) | CallbackPersist (n, _) -> assert false
+          | Flags n -> assert false
+          | Int n -> assert false
+          | Int64 n -> assert false
+          | Opaque n -> rust_cb_opaque := n; []
+          | Mutable arg -> assert false
+          | Path n -> assert false
+          | SockAddrAndLen (n, len) -> assert false
+          | String n -> ["&'static str"]
+          | StringList n -> assert false
+          | UInt n -> assert false
+          | UInt32 n -> assert false
+          | UInt64 n -> assert false
+      ) args))
+
 let print_rust_desc shortdesc longdesc gl_all prefix =
   let desc = Str.global_replace rust_fn_wild_rex ("[`" ^ gl_all ^ "`]") longdesc in
   let desc = Str.global_replace rust_fn_rex ("[`" ^ prefix ^ "\\1`]") desc in
   let desc = Str.global_replace rust_const_rex "[`\\1`]" desc in
+  (* ugly hack that works *)
+  let desc = Str.global_replace
+               (Str.regexp "\\[`\\(DEBUG=1\\)`\\]") "`LIBNBD_\\1`" desc in
   let desc = Str.global_replace rust_rest_rex "`\\1`" desc in
   let desc = pod2text desc in
   let desc = trim_trailing_empty desc in
   let desc = [(String.capitalize_ascii shortdesc); ""] @ desc in
   let desc = List.map
-      (fun line -> (str_indent 1 ("/// " ^ (String.trim line))))
+               (fun line ->
+                  let line = String.trim line in
+                  let line = (if line <> "" then " " else "") ^ line in
+                  let line = "///" ^ line in
+                  str_indent 1 line)
       desc in
   List.iter (pr "%s\n") desc
 
-let rec rust_ffi_arg_list ?(handle = false) args =
+let rec rust_ffi_arg_list ?(opaque = true) ?(handle = false) args =
   String.concat ", " (
     (if handle then [
         sprintf "h: *mut nbd_handle";
@@ -5005,9 +5045,9 @@ let rec rust_ffi_arg_list ?(handle = false) args =
            | Callback (n, args)
            | CallbackPersist (n, args) -> [
              (sprintf "%s: Option<" n) ^
-             (sprintf "unsafe extern \"C\" fn(") ^
+             (sprintf "extern \"C\" fn(") ^
              (rust_ffi_arg_list args) ^
-             (sprintf ")>")
+             (sprintf ") -> c_int>")
            ]
            | Flags n -> [
                sprintf "%s: u32" n;
@@ -5023,6 +5063,7 @@ let rec rust_ffi_arg_list ?(handle = false) args =
              ]
            | Mutable arg -> assert false
            | Opaque n -> [
+               (if opaque then "" else "_") ^
                sprintf "%s: *mut c_void" n;
              ]
            | Path n
@@ -5075,11 +5116,10 @@ let rec rust_arg_list ?(handle = false) args =
                sprintf "%s: usize" len;
              ]
            | Callback (n, args)
-           | CallbackPersist (n, args) -> [
-               (sprintf "%s: Option<" n) ^
-               (sprintf "Fn(") ^
-               (rust_arg_list args) ^
-               ")>";
+           | CallbackPersist (n, args) ->
+             rust_cb_type := Some args;
+             [
+               sprintf "%s: Option<&mut CallbackFn>" n;
              ]
            | Flags n -> [
                sprintf "%s: u32" n;
@@ -5187,7 +5227,7 @@ extern \"C\" {
     pub fn nbd_close(handle: *mut nbd_handle);
     pub fn nbd_add_close_callback(
         handle: *mut nbd_handle,
-        callback: Option<unsafe extern \"C\" fn(*mut c_void)>,
+        callback: Option<extern \"C\" fn(*mut c_void)>,
         ) -> c_int;
 
     pub fn nbd_get_error() -> *const c_char;
@@ -5238,8 +5278,7 @@ let generate_rust_glue_rs () =
          | SockAddrAndLen (n, _) -> assert false
          | String n ->
            let r = [
-             sprintf "let tmp%d = unsafe { CStr::from_ptr(%s) };" !num n;
-             sprintf "let %s = tmp%d.to_str().unwrap();" n !num;
+             sprintf "let %s = unsafe { CStr::from_ptr(%s) }.to_str().unwrap();" n n;
            ] in
            cb_argnames := !cb_argnames @ [n];
            incr num;
@@ -5263,25 +5302,47 @@ let generate_rust_glue_rs () =
          | BytesOut (_, count) -> assert false
          | Callback (n, _) -> assert false
          | CallbackPersist (n, a) ->
-           argnames := !argnames @ ["cb"; "NULL"];
+           argnames := !argnames @ ["cb"; "Some(cb_wrapper)"];
            cb_argnames := [];
-           let trans = List.map (str_indent 3) (
-             List.flatten (List.map c_to_rust a)) in
+           let cb_args = (match !rust_cb_type with
+               | None -> failwithf "rust_cb_type not filled in properly"
+               | Some x -> x) in
+           let trans = List.flatten (List.map c_to_rust a) in
            [
-             sprintf "let cb = match %s {" n;
-             str_indent 1 "Some(rust_cb) -> {";
-             str_indent 2
-               (sprintf "let tmp = Box::new(|%s| {" (rust_ffi_arg_list a));
+             "type CallbackFn = Fn(" ^ (rust_arg_type_list cb_args) ^ ")" ^
+             (if name <> "set_debug_callback"
+              then " -> Result<(), i32>;"
+              else ";");
+             "";
+             "extern \"C\" fn cb_wrapper(" ^
+             (rust_ffi_arg_list a) ^
+             ") -> c_int {";
            ] @
-           trans @
-           [
-             str_indent 3
-               (sprintf "rust_cb(%s)" (String.concat ", " !cb_argnames));
-             str_indent 2 "});";
-             str_indent 2 "tmp.into_raw()";
-             str_indent 1 "},";
-             str_indent 1 "None -> std::ptr::null(),";
+           List.map (str_indent 1) ([
+             "let cb = " ^ !rust_cb_opaque ^ " as *mut Option<&CallbackFn>;";
+             "let cb = match unsafe { *cb } {";
+             (indent 1) ^ "Some(x) => x,";
+             (indent 1) ^ "None => return 0,";
              "};";
+           ] @
+            trans @
+            [
+              "cb(" ^ (String.concat ", " !cb_argnames) ^ ");";
+              "0"
+            ]) @
+           [
+             "};";
+             "";
+             sprintf "let cb = %s.map(move |rust_cb| {" n;
+             str_indent 1
+               (sprintf "move |%s| {" (rust_ffi_arg_list ~opaque:false a));
+           ] @
+           List.map (str_indent 2) trans @
+           [
+             (indent 2) ^ "rust_cb(" ^ (String.concat ", " !cb_argnames) ^ ")";
+             (indent 1) ^ "}";
+             "});";
+             "let cb = &cb as *const _ as *mut c_void;"
            ]
          | Flags n -> assert false
          | Int n -> assert false
@@ -5347,18 +5408,33 @@ let generate_rust_glue_rs () =
     in
 
     pr "\n";
-    print_rust_desc shortdesc longdesc "libnbd_rs::*" "";
+    print_rust_desc shortdesc longdesc "libnbd_rs::*" "Nbd::";
     pr "%s" (str_indent 1 ("pub fn " ^ name));
-    pr "(%s)" (rust_arg_list ~handle:true args);
-    pr " -> %s {\n" ret_rs_type;
+    rust_cb_type := None;
+    rust_cb_opaque := "";
+    let arg_list = rust_arg_list ~handle:true args in
+    pr "%s(%s)" (match !rust_cb_type with
+        | None -> ""
+        | Some _ -> "<CallbackFn>") arg_list;
+    pr " -> %s" ret_rs_type;
+    (match !rust_cb_type with
+     | None -> pr " "
+     | Some args ->
+       pr "\n%s" (str_indent 1 "where\n");
+       pr "%s" (str_indent 2 ("CallbackFn: Fn(" ^ (rust_arg_type_list args) ^ ")"));
+       (if name <> "set_debug_callback" then pr " -> Result<(), i32>");
+       pr ",\n";
+       pr "%s" (indent 1);
+    );
+    pr "{\n";
 
-    List.iter (fun line -> pr "%s\n" (str_indent 3 line)) (
+    List.iter (fun line -> pr "%s\n" (str_indent 2 line)) (
       List.flatten (List.map rust_to_c args)
     );
 
-    pr "%s" (str_indent 2
-               (sprintf "let ret = unsafe { nbd_%s (self.handle" name));
-    pr "%s) };\n" (String.concat ", " !argnames);
+    pr "%s" ((indent 2) ^ "let ret = unsafe { nbd_" ^ name ^ "(self.handle");
+    List.iter (fun arg -> pr ", %s" arg) !argnames;
+    pr ") };\n";
 
     List.iter (fun line -> pr "%s\n" (str_indent 2 line)) after;
 
@@ -5368,16 +5444,16 @@ let generate_rust_glue_rs () =
   generate_header CStyle;
 
   pr "\
-
+use libc;
+use libnbd_sys::*;
+use std::ffi::CStr;
 #[allow(unused_imports)]
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::os::unix::io::RawFd;
-use std::ffi::CStr;
-use libnbd_sys::*;
-use libc;
 
-use super::nbd_error::*;
 pub use super::base::*;
+use super::nbd_error::*;
+
 ";
 
   let implemented_rust_calls = [

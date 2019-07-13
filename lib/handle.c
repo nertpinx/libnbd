@@ -93,6 +93,8 @@ nbd_close (struct nbd_handle *h)
   struct close_callback *cc, *cc_next;
   struct meta_context *m, *m_next;
 
+  debug (h, "TEST FOR %s", "callbacks from bindings");
+
   if (h == NULL)
     return;
 
@@ -234,6 +236,7 @@ nbd_unlocked_get_package_name (struct nbd_handle *h)
 const char *
 nbd_unlocked_get_version (struct nbd_handle *h)
 {
+  debug(h, "FML: %p", h->debug_fn);
   return PACKAGE_VERSION;
 }
 
