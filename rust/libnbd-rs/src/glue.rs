@@ -61,30 +61,40 @@ impl Nbd {
     /// The callback should not call [`libnbd_rs::*`] APIs on
     /// the same handle since it can be called while holding the
     /// handle lock and will cause a deadlock.
-    pub fn set_debug_callback(&mut self, debug_fn: Option<Box<Fn(&'static str, &'static str)>>) -> Result<(), NbdError> {
-        extern "C" fn cb_wrapper(data: *mut c_void, context: *const c_char, msg: *const c_char) -> c_int {
-//            eprintln!("BLA_data: {:#?}", data);
+    pub fn set_debug_callback(
+        &mut self,
+        debug_fn: Option<Box<dyn Fn(&'static str, &'static str)>>,
+    ) -> Result<(), NbdError> {
+        extern "C" fn cb_wrapper(
+            data: *mut c_void,
+            context: *const c_char,
+            msg: *const c_char,
+        ) -> c_int {
+            eprintln!("BLA_data: {:#?}", data);
             let cb = data as *mut Option<&dyn Fn(&'static str, &'static str)>;
-//            eprintln!("BLA_cb: {:#?}", cb);
+            eprintln!("BLA_cb: {:#?}", cb);
             let cb2 = match unsafe { *cb } {
                 Some(x) => x,
-                None => return 0,
+                None => {
+                    eprintln!("WAT!?!?");
+                    return 0;
+                }
             };
             let context = unsafe { CStr::from_ptr(context) }.to_str().unwrap();
             let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap();
 
-//            eprintln!("BLA_cb2: {:p}", cb2);
+            eprintln!("BLA_cb2: {:p}", cb2);
 
             cb2(context, msg);
             0
         };
 
-//        eprintln!("MEH: {:#?}", &debug_fn as *const _);
+        eprintln!("MEH: {:#?}", &debug_fn as *const _);
         let debug_fn2 = match debug_fn {
             Some(f) => {
                 let ptr = Box::leak(f) as *const _ as *mut _;
+                eprintln!("MEH_d: {:p}", ptr);
                 let tmp = unsafe { Box::from_raw(ptr) };
-//                eprintln!("MEH_d: {:p}", tmp);
                 self.debug_callback = Some(tmp);
                 Some(ptr)
             }
@@ -94,9 +104,9 @@ impl Nbd {
             }
         };
 
-//        eprintln!("MEH2: {:#?}", debug_fn2);
+        eprintln!("MEH2: {:#?}", &debug_fn2 as *const _);
         let debug_fn3 = &debug_fn2 as *const _ as *mut c_void;
-//        eprintln!("MEH3: {:#?}", debug_fn3);
+        eprintln!("MEH3: {:#?}", debug_fn3);
 
         let a = std::ffi::CString::new("asdf").unwrap();
         let b = std::ffi::CString::new("fdsa").unwrap();

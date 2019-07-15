@@ -4,7 +4,7 @@ use libnbd_sys::*;
 pub struct Nbd {
     pub(crate) handle: *mut nbd_handle,
 
-    pub(crate) debug_callback: Option<Box<Fn(&'static str, &'static str)>>,
+    pub(crate) debug_callback: Option<Box<dyn Fn(&'static str, &'static str)>>,
 }
 
 impl Nbd {
