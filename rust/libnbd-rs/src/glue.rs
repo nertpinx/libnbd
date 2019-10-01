@@ -20,12 +20,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-//use libc;
+use libc;
 use libnbd_sys::*;
 use std::ffi::CStr;
 #[allow(unused_imports)]
 use std::os::raw::{c_char, c_int, c_uint, c_void};
-//use std::os::unix::io::RawFd;
+use std::os::unix::io::RawFd;
 
 pub use super::base::*;
 use super::nbd_error::*;
@@ -61,58 +61,33 @@ impl Nbd {
     /// The callback should not call [`libnbd_rs::*`] APIs on
     /// the same handle since it can be called while holding the
     /// handle lock and will cause a deadlock.
-    pub fn set_debug_callback(
-        &mut self,
-        debug_fn: Option<Box<dyn Fn(&'static str, &'static str)>>,
-    ) -> Result<(), NbdError> {
-        extern "C" fn cb_wrapper(
-            data: *mut c_void,
-            context: *const c_char,
-            msg: *const c_char,
-        ) -> c_int {
-            eprintln!("BLA_data: {:#?}", data);
-            let cb = data as *mut Option<&dyn Fn(&'static str, &'static str)>;
-            eprintln!("BLA_cb: {:#?}", cb);
-            let cb2 = match unsafe { *cb } {
+    pub fn set_debug_callback<CallbackFn>(&self, debug_fn: Option<&mut CallbackFn>) -> Result<(), NbdError>
+    where
+        CallbackFn: Fn(&'static str, &'static str),
+    {
+        type CallbackFn = Fn(&'static str, &'static str);
+
+        extern "C" fn cb_wrapper(data: *mut c_void, context: *const c_char, msg: *const c_char) -> c_int {
+            let cb = data as *mut Option<&CallbackFn>;
+            let cb = match unsafe { *cb } {
                 Some(x) => x,
-                None => {
-                    eprintln!("WAT!?!?");
-                    return 0;
-                }
+                None => return 0,
             };
             let context = unsafe { CStr::from_ptr(context) }.to_str().unwrap();
             let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap();
-
-            eprintln!("BLA_cb2: {:p}", cb2);
-
-            cb2(context, msg);
+            cb(context, msg);
             0
         };
 
-        eprintln!("MEH: {:#?}", &debug_fn as *const _);
-        let debug_fn2 = match debug_fn {
-            Some(f) => {
-                let ptr = Box::leak(f) as *const _ as *mut _;
-                eprintln!("MEH_d: {:p}", ptr);
-                let tmp = unsafe { Box::from_raw(ptr) };
-                self.debug_callback = Some(tmp);
-                Some(ptr)
+        let cb = debug_fn.map(move |rust_cb| {
+            move |_data: *mut c_void, context: *const c_char, msg: *const c_char| {
+                let context = unsafe { CStr::from_ptr(context) }.to_str().unwrap();
+                let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap();
+                rust_cb(context, msg)
             }
-            None => {
-                self.debug_callback = None;
-                None
-            }
-        };
-
-        eprintln!("MEH2: {:#?}", &debug_fn2 as *const _);
-        let debug_fn3 = &debug_fn2 as *const _ as *mut c_void;
-        eprintln!("MEH3: {:#?}", debug_fn3);
-
-        let a = std::ffi::CString::new("asdf").unwrap();
-        let b = std::ffi::CString::new("fdsa").unwrap();
-        cb_wrapper(debug_fn3, a.as_ptr(), b.as_ptr());
-
-        let ret = unsafe { nbd_set_debug_callback(self.handle, debug_fn3, Some(cb_wrapper)) };
+        });
+        let cb = &cb as *const _ as *mut c_void;
+        let ret = unsafe { nbd_set_debug_callback(self.handle, cb, Some(cb_wrapper)) };
         if ret == -1 {
             return Err(NbdError::from_libnbd());
         }
