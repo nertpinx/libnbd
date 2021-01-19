@@ -96,6 +96,7 @@ stamp-generator:
 	    echo "Source files are missing from your build.";  \
 	    echo;                                              \
 	    echo "Install the OCaml bytecode compiler (the program called ‘ocamlc’)"; \
+	    echo "and OCaml findlib (program called ocamlfind)"; \
 	    echo "and rerun ./configure && make";              \
 	    echo;                                              \
 	    echo "        *** *** ***";                        \
