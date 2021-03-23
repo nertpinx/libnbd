@@ -22,7 +22,7 @@ do
     fedora-rawhide)
         for cross in mingw32 mingw64
         do
-            $LCITOOL dockerfile $host libnbd --cross $cross > ci-$host-cross-$cross.Dockerfile
+            $LCITOOL dockerfile $host libnbd --cross $cross > $host-cross-$cross.Dockerfile
         done
         ;;
     debian-*)
@@ -33,10 +33,10 @@ do
             then
                 continue
             fi
-            $LCITOOL dockerfile $host libnbd --cross $cross > ci-$host-cross-$cross.Dockerfile
+            $LCITOOL dockerfile $host libnbd --cross $cross > $host-cross-$cross.Dockerfile
         done
         ;;
     esac
 
-    $LCITOOL dockerfile $host libnbd > ci-$host.Dockerfile
+    $LCITOOL dockerfile $host libnbd > $host.Dockerfile
 done
